@@ -1,0 +1,37 @@
+---
+
+- name: Provisionning Nodes
+  hosts: clients
+  remote_user: root
+
+  tasks:
+
+    - name: Node | Update & Upgrade
+      ansible.builtin.apt:
+        update_cache: yes
+        upgrade: yes
+
+    - name: Node | Install packages
+      ansible.builtin.apt:
+        pkg:
+          - curl
+          - software-properties-common
+          - gnupg2
+          - vim
+        state: present
+
+    - name: Node | Teleport Agent install
+      ansible.builtin.shell: |
+        curl "https://teleport.razorcorp.dev/scripts/install.sh" | bash
+
+    - name: Node | Teleport Cluster Join
+      ansible.builtin.shell: |
+        teleport node configure \
+          --output=file:///etc/teleport.yaml \
+          --token={{ join_token }} \
+          --proxy=teleport.razorcorp.dev:443
+
+    - name: Node | Enable Teleport Service
+      ansible.builtin.shell: |
+        systemctl enable teleport
+        systemctl start teleport

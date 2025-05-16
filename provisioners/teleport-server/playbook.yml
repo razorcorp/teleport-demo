@@ -1,0 +1,129 @@
+---
+
+- name: Initialise Server
+  hosts: teleport-server
+  remote_user: root
+
+  tasks:
+    - name: Cloudflare | API Key
+      set_fact: cf_token="{{ lookup('env', 'CLOUDFLARE_API_TOKEN') }}"
+    - name: Cloudflare | Email address
+      set_fact: cf_email="{{ lookup('env', 'CLOUDFLARE_EMAIL') }}"
+
+    - name: Teleport | Update & Upgrade
+      ansible.builtin.apt:
+        update_cache: yes
+        upgrade: yes
+
+    - name: Teleport | Install packages
+      ansible.builtin.apt:
+        pkg:
+          - curl
+          - software-properties-common
+          - gnupg2
+          - vim
+        state: present
+
+    - name: Teleport | Upgrade Python
+      ansible.builtin.apt_repository:
+        repo: ppa:deadsnakes/ppa
+
+    - name: Teleport | Install Python 3.11
+      ansible.builtin.apt:
+        pkg:
+          - python3.11
+          - python3.11-distutils
+        update_cache: yes
+
+    - name: Teleport | Install PIP
+      ansible.builtin.shell: |
+        curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 -
+      args:
+        executable: /bin/bash
+
+    - name: Teleport | Change default Python version to 3.11
+      ansible.builtin.shell: |
+        update-alternatives --install /usr/bin/python3 python3 $(which python3.11) 1
+        update-alternatives --install /usr/bin/python3 python3 $(which python3.8) 2
+        update-alternatives --set python3 $(update-alternatives --list python3 | grep 3.11)
+      args:
+        executable: /bin/bash
+
+    - name: Teleport | Fix Python3-apt version
+      ansible.builtin.shell: |
+        apt-get remove --purge python3-apt -y
+        apt-get install python3-apt -y
+      args:
+        executable: /bin/bash
+
+    - name: Teleport | Install certbot
+      ansible.builtin.apt:
+        name: certbot
+        state: present
+
+    - name: Teleport | Install pyopenssl
+      ansible.builtin.pip:
+        name: pyopenssl
+        extra_args: --upgrade
+
+    - name: Teleport | Install certbot-dns-cloudflare plugin
+      ansible.builtin.pip:
+        name: certbot-dns-cloudflare
+
+    - name: Teleport | Download the Teleport PGP public key
+      ansible.builtin.get_url:
+        url: https://apt.releases.teleport.dev/gpg
+        dest: /etc/apt/trusted.gpg.d/teleport-archive-keyring.asc
+        checksum: sha256:58958584ca95d311f8b040b010259c7a92cf97e7f0bc850793564c576812eef5
+
+    - name: Teleport | Add Teleport GPG key to APT Source
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/etc/apt/trusted.gpg.d/teleport-archive-keyring.asc] https://apt.releases.teleport.dev/ubuntu focal stable/v17"
+        state: present
+        update_cache: yes
+
+    - name: Teleport | Install teleport
+      ansible.builtin.apt:
+        name: teleport
+        state: present
+        update_cache: yes
+
+    - name: Teleport | Cloudflare Credentials
+      ansible.builtin.shell: |
+        mkdir -p /var/secrets/certbot
+        cat <<-EOF | tee /var/secrets/certbot/cloudflare.ini
+        # Cloudflare API token used by Certbot
+        dns_cloudflare_api_token = {{ cf_token }}
+        EOF
+        chmod 0600 /var/secrets/certbot/cloudflare.ini
+
+    - name: Teleport | Generate LetsEcrypt certificate
+      ansible.builtin.shell: |
+        certbot certonly \
+          --non-interactive \
+          --agree-tos \
+          --no-eff-email \
+          --no-redirect \
+          --email "support@razorcorp.dev" \
+          --dns-cloudflare \
+          --dns-cloudflare-credentials /var/secrets/certbot/cloudflare.ini \
+          -d teleport.razorcorp.dev \
+          -d *.teleport.razorcorp.dev
+      args:
+        executable: /bin/bash
+
+    - name: Teleport | Configure Service
+      ansible.builtin.shell: |
+        teleport configure -o file \
+          --cluster-name=teleport.razorcorp.dev \
+          --public-addr=teleport.razorcorp.dev \
+          --cert-file=/etc/letsencrypt/live/teleport.razorcorp.dev/fullchain.pem \
+          --key-file=/etc/letsencrypt/live/teleport.razorcorp.dev/privkey.pem
+        systemctl enable teleport
+        systemctl start teleport
+      args:
+        executable: /bin/bash
+
+    - name: Teleport | Initlilise the Admin user
+      ansible.builtin.shell: |
+        tctl users add teleport-admin --roles=editor,access --logins=root

@@ -1,0 +1,9 @@
+kind: role
+version: v7
+metadata:
+  name: dashboard-access
+spec:
+  allow:
+    app_labels:
+      env: "dashboard"
+

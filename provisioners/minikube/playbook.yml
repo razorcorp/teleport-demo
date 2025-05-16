@@ -1,0 +1,136 @@
+---
+
+- name: Provisionning Minikube
+  hosts: all
+  remote_user: ubuntu
+  become: true
+
+  tasks:
+
+    - name: Minikube | Update & Upgrade
+      ansible.builtin.apt:
+        update_cache: yes
+        upgrade: yes
+
+    - name: Minikube | Install packages
+      ansible.builtin.apt:
+        pkg:
+          - curl
+          - software-properties-common
+          - gnupg2
+          - vim
+          - ca-certificates
+          - conntrack
+          - ethtool
+          - helm
+        state: present
+
+    - name: Minikube | Create GPG keyring dir
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        recurse: yes
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Minikube | Download Docker PGP public key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        checksum: sha256:1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570
+
+    - name: Minikube | Add Docker GPG key to APT Source
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu focal stable"
+        state: present
+        update_cache: yes
+    
+    - name: Minikube | Install Docker CE
+      ansible.builtin.apt:
+        pkg:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        update_cache: yes
+
+    - name: Minikube | Download & install kubectl
+      ansible.builtin.shell: |
+        curl -fsSL https://dl.k8s.io/release/v1.33.0/bin/linux/amd64/kubectl -o /tmp/kubectl
+        install -o root -g root -m 0755 /tmp/kubectl /usr/local/bin/kubectl
+
+    - name: Minikube | Download & install crictl
+      ansible.builtin.shell: |
+        curl -fsSL https://github.com/kubernetes-sigs/cri-tools/releases/download/v1.32.0/crictl-v1.32.0-linux-amd64.tar.gz -o /tmp/crictl-v1.32.0-linux-amd64.tar.gz
+        tar -xzvf /tmp/crictl-v1.32.0-linux-amd64.tar.gz -C /usr/local/bin
+
+    - name: Minikube | Download cri-dockerd debian package
+      ansible.builtin.get_url:
+        url: https://github.com/Mirantis/cri-dockerd/releases/download/v0.3.17/cri-dockerd_0.3.17.3-0.ubuntu-focal_amd64.deb
+        dest: /opt/cri-dockerd_0.3.17.3-0.ubuntu-focal_amd64.deb
+        checksum: sha256:2ce38478b1319274fc5f542c1a6ad47348a8303ef032f8d023482d8ba9d808bc
+
+    - name: Minikube | Install cri-dockerd
+      ansible.builtin.apt:
+        deb: /opt/cri-dockerd_0.3.17.3-0.ubuntu-focal_amd64.deb
+
+    - name: Minikube | Download & install containernetworking-plugins
+      ansible.builtin.shell: |
+        mkdir -p /opt/cni/bin
+        mkdir -p /etc/cni/net.d
+        curl -fsSL https://github.com/containernetworking/plugins/releases/download/v1.7.1/cni-plugins-linux-amd64-v1.7.1.tgz -o /tmp/cni-plugins-linux-amd64-v1.7.1.tgz
+        tar -xzvf /tmp/cni-plugins-linux-amd64-v1.7.1.tgz -C /opt/cni/bin
+
+    - name: Minikube | Download Minikube debian package
+      ansible.builtin.get_url:
+        url: https://storage.googleapis.com/minikube/releases/latest/minikube_latest_amd64.deb
+        dest: /opt/minikube_latest_amd64.deb
+        checksum: sha256:8a6311c561d26e63bb61fb92918f3d18bd12080bc9d269b3763a6b65e1f06218
+
+    - name: Minikube | Install Minukube
+      ansible.builtin.apt:
+        deb: /opt/minikube_latest_amd64.deb
+
+    - name: Minikube | Configure cluster and startup on boot
+      ansible.builtin.shell: |
+        cat <<-EOF | tee /lib/systemd/system/minikube.service
+          [Unit]
+          Description=minikube
+          After=network-online.target firewalld.service containerd.service docker.service
+          Wants=network-online.target docker.service
+          Requires=docker.socket containerd.service docker.service
+
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          WorkingDirectory=/root
+          ExecStart=/usr/bin/minikube start --memory=1900mb --driver=none #--extra-config kubeadm.ignore-preflight-errors=SystemVerification
+          ExecStop=/usr/bin/minikube stop
+          User=root
+          Group=root
+
+          [Install]
+          WantedBy=multi-user.target
+        EOF
+        systemctl daemon-reload
+        systemctl enable kubelet.service
+        systemctl enable minikube
+        systemctl start minikube
+
+    - name: Minikube | Teleport Agent install
+      ansible.builtin.shell: |
+        curl "https://teleport.razorcorp.dev/scripts/install.sh" | bash
+
+    - name: Minikube | Teleport Cluster Join
+      ansible.builtin.shell: |
+        teleport node configure \
+          --output=file:///etc/teleport.yaml \
+          --token={{ join_token }} \
+          --proxy=teleport.razorcorp.dev:443
+
+    - name: Minikube | Enable Teleport Service
+      ansible.builtin.shell: |
+        systemctl enable teleport
+        systemctl start teleport

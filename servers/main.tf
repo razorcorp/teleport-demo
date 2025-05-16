@@ -94,6 +94,10 @@ module "test-server" {
 
 }
 
+module "aws_console" {
+  source = "./aws"
+}
+
 # module "minikube" {
 #   source = "./lxc"
 

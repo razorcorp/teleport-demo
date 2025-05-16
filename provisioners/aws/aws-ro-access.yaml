@@ -1,0 +1,10 @@
+kind: role
+version: v5
+metadata:
+  name: aws-ro-access
+spec:
+  allow:
+    app_labels:
+      '*': '*'
+    aws_role_arns:
+    - arn:aws:iam::390239780667:role/ExampleReadOnlyAccess
